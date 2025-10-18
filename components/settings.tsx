@@ -10,16 +10,38 @@ import { getBonos, setBonos } from "./attendance-processor"
 export function Settings() {
   const [bono1, setBono1Value] = useState(0)
   const [bono2, setBono2Value] = useState(0)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const bonos = getBonos()
-    setBono1Value(bonos.bono1)
-    setBono2Value(bonos.bono2)
+    loadBonos()
   }, [])
 
-  const handleSave = () => {
-    setBonos(bono1, bono2)
-    alert("Bonos guardados correctamente")
+  const loadBonos = async () => {
+    setLoading(true)
+    const bonos = await getBonos()
+    setBono1Value(bonos.bono1_valor)
+    setBono2Value(bonos.bono2_valor)
+    setLoading(false)
+  }
+
+  const handleSave = async () => {
+    try {
+      await setBonos(bono1, bono2)
+      alert("Bonos guardados correctamente")
+    } catch (error) {
+      alert("Error al guardar los bonos")
+      console.error(error)
+    }
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-center text-muted-foreground">Cargando configuración...</p>
+        </CardContent>
+      </Card>
+    )
   }
 
   return (

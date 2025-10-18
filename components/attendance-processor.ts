@@ -80,30 +80,60 @@ const EMPLEADOS_INICIAL: Worker[] = [
 ]
 
 // Configuración de bonos (se puede modificar desde ajustes)
-let BONO1_VALOR = 0
-let BONO2_VALOR = 0
+const BONO1_VALOR = 0
+const BONO2_VALOR = 0
 
-export function setBonos(bono1: number, bono2: number) {
-  BONO1_VALOR = bono1
-  BONO2_VALOR = bono2
-}
+import { createClient } from "@/lib/supabase/client"
 
-export function getBonos() {
-  return { bono1: BONO1_VALOR, bono2: BONO2_VALOR }
-}
+export async function getWorkers(): Promise<Worker[]> {
+  const supabase = createClient()
+  const { data, error } = await supabase.from("workers").select("*").order("nombre")
 
-export function getWorkers(): Worker[] {
-  if (typeof window === "undefined") return EMPLEADOS_INICIAL
-  const stored = localStorage.getItem("workers_config")
-  if (stored) {
-    return JSON.parse(stored)
+  if (error) {
+    console.error("[v0] Error loading workers:", error)
+    return []
   }
-  return EMPLEADOS_INICIAL
+
+  return data || []
 }
 
-export function saveWorkers(workers: Worker[]) {
-  if (typeof window === "undefined") return
-  localStorage.setItem("workers_config", JSON.stringify(workers))
+export async function saveWorker(worker: Worker) {
+  const supabase = createClient()
+  const { error } = await supabase.from("workers").upsert(worker, { onConflict: "nombre" })
+
+  if (error) {
+    console.error("[v0] Error saving worker:", error)
+    throw error
+  }
+}
+
+export async function getBonos() {
+  const supabase = createClient()
+  const { data, error } = await supabase.from("bonos").select("*").limit(1).single()
+
+  if (error) {
+    console.error("[v0] Error loading bonos:", error)
+    return { bono1_valor: 0, bono2_valor: 0 }
+  }
+
+  return data || { bono1_valor: 0, bono2_valor: 0 }
+}
+
+export async function setBonos(bono1: number, bono2: number) {
+  const supabase = createClient()
+  const { data: existing } = await supabase.from("bonos").select("id").limit(1).single()
+
+  if (existing) {
+    const { error } = await supabase
+      .from("bonos")
+      .update({ bono1_valor: bono1, bono2_valor: bono2 })
+      .eq("id", existing.id)
+
+    if (error) {
+      console.error("[v0] Error updating bonos:", error)
+      throw error
+    }
+  }
 }
 
 interface DayRecord {
@@ -116,19 +146,25 @@ interface DayRecord {
 }
 
 export class AttendanceProcessor {
-  private empleadosConfig = getWorkers()
+  private empleadosConfig: Worker[] = []
 
-  processReport(reportText: string) {
+  async initialize() {
+    this.empleadosConfig = await getWorkers()
+  }
+
+  async processReport(reportText: string) {
     try {
-      // Extraer nombre del empleado - buscar después de "Nombre" hasta "Fecha"
+      if (this.empleadosConfig.length === 0) {
+        await this.initialize()
+      }
+
+      // Extraer nombre del empleado
       const nombreMatch = reportText.match(/Nombre\s+(.+?)(?:\s+Fecha|\s+\n)/is)
       if (!nombreMatch) {
         return { error: "No se pudo encontrar el nombre del empleado en el reporte" }
       }
 
       const nombreEmpleado = nombreMatch[1].trim().toLowerCase()
-
-      console.log("[v0] Nombre detectado:", nombreEmpleado)
 
       // Buscar configuración del empleado
       const empleadoConfig = this.empleadosConfig.find((emp) => emp.nombre.toLowerCase() === nombreEmpleado)
@@ -140,10 +176,13 @@ export class AttendanceProcessor {
       }
 
       // Extraer tabla de asistencia
-      const registros = this.extractAttendanceRecords(reportText, empleadoConfig)
+      const { registrosTrabajados, totalDiasLaborales, diasFaltados } = this.extractAttendanceRecords(
+        reportText,
+        empleadoConfig,
+      )
 
       // Calcular horas totales
-      const totalHoras = registros.reduce((sum, r) => sum + (r.horas || 0), 0)
+      const totalHoras = registrosTrabajados.reduce((sum, r) => sum + (r.horas || 0), 0)
 
       // Aplicar redondeo comercial
       const horasRedondeadas = this.roundCommercial(totalHoras)
@@ -151,14 +190,14 @@ export class AttendanceProcessor {
       // Calcular pago base
       const totalPagar = horasRedondeadas * empleadoConfig.tarifa_hora
 
-      // Determinar bono
-      const bono = this.determineBono(registros, empleadoConfig)
+      const bono = diasFaltados > 0 ? "sin bono" : this.determineBono(registrosTrabajados, empleadoConfig)
 
+      const bonosConfig = await getBonos()
       let valorBono = 0
       if (bono === "bono1") {
-        valorBono = BONO1_VALOR
+        valorBono = bonosConfig.bono1_valor
       } else if (bono === "bono2") {
-        valorBono = BONO2_VALOR
+        valorBono = bonosConfig.bono2_valor
       }
 
       const totalFinal = totalPagar + valorBono
@@ -171,7 +210,9 @@ export class AttendanceProcessor {
         bono: bono,
         valorBono: valorBono,
         totalFinal: totalFinal,
-        detalles: registros,
+        detalles: registrosTrabajados,
+        diasFaltados: diasFaltados,
+        totalDiasLaborales: totalDiasLaborales,
       }
     } catch (error) {
       return {
@@ -180,18 +221,21 @@ export class AttendanceProcessor {
     }
   }
 
-  private extractAttendanceRecords(reportText: string, empleadoConfig: any): DayRecord[] {
+  private extractAttendanceRecords(
+    reportText: string,
+    empleadoConfig: Worker,
+  ): { registrosTrabajados: DayRecord[]; totalDiasLaborales: number; diasFaltados: number } {
     const records: DayRecord[] = []
     const lines = reportText.split("\n")
 
-    // Buscar la sección de la tabla de asistencia
-    let inTable = false
+    let diasFaltados = 0
+    let totalDiasLaborales = 0
+
     const dayPattern = /(\d{2})\s+(Lu|Ma|Mi|Ju|Vi|Sa|Do)\s+(.+)/
 
     for (const line of lines) {
       const match = line.match(dayPattern)
       if (match) {
-        inTable = true
         const [, fecha, dia, resto] = match
 
         // Parsear entrada y salida
@@ -204,21 +248,24 @@ export class AttendanceProcessor {
         // Verificar si es día laboral
         const esDiaLaboral = empleadoConfig.dias_trabajo.includes(dia)
 
+        if (!esDiaLaboral) continue
+
+        totalDiasLaborales++
+
         // Verificar si es falta
         const esFalta = resto.includes("Falta")
 
         let horas: number | null = null
         let estado = "no laboral"
 
-        if (esDiaLaboral) {
-          if (esFalta) {
-            estado = "falta"
-          } else if (entrada && salida) {
-            horas = this.calculateHours(entrada, salida)
-            estado = "trabajado"
-          } else if (entrada || salida) {
-            estado = "incompleto"
-          }
+        if (esFalta) {
+          estado = "falta"
+          diasFaltados++
+        } else if (entrada && salida) {
+          horas = this.calculateHours(entrada, salida)
+          estado = "trabajado"
+        } else if (entrada || salida) {
+          estado = "incompleto"
         }
 
         records.push({
@@ -232,7 +279,9 @@ export class AttendanceProcessor {
       }
     }
 
-    return records.filter((r) => r.estado === "trabajado")
+    const registrosTrabajados = records.filter((r) => r.estado === "trabajado")
+
+    return { registrosTrabajados, totalDiasLaborales, diasFaltados }
   }
 
   private calculateHours(entrada: string, salida: string): number {
@@ -257,7 +306,7 @@ export class AttendanceProcessor {
     }
   }
 
-  private determineBono(registros: DayRecord[], empleadoConfig: any): string {
+  private determineBono(registros: DayRecord[], empleadoConfig: Worker): string {
     if (registros.length === 0) return "sin bono"
 
     const [horaProgHora, horaProgMin] = empleadoConfig.hora_entrada_programada.split(":").map(Number)
@@ -291,8 +340,8 @@ export class AttendanceProcessor {
   }
 }
 
-// Added Worker type
 export interface Worker {
+  id?: string
   nombre: string
   tarifa_hora: number
   dias_trabajo: string[]

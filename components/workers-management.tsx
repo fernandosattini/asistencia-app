@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { getWorkers, saveWorkers, type Worker } from "./attendance-processor"
+import { getWorkers, saveWorker, type Worker } from "./attendance-processor"
 
 const DIAS_SEMANA = [
   { id: "Lu", label: "Lunes" },
@@ -21,15 +21,22 @@ export function WorkersManagement() {
   const [workers, setWorkers] = useState<Worker[]>([])
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null)
   const [editedWorker, setEditedWorker] = useState<Worker | null>(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const loadedWorkers = getWorkers()
+    loadWorkers()
+  }, [])
+
+  const loadWorkers = async () => {
+    setLoading(true)
+    const loadedWorkers = await getWorkers()
     setWorkers(loadedWorkers)
     if (loadedWorkers.length > 0) {
       setSelectedWorker(loadedWorkers[0].nombre)
       setEditedWorker({ ...loadedWorkers[0] })
     }
-  }, [])
+    setLoading(false)
+  }
 
   const handleWorkerSelect = (nombre: string) => {
     const worker = workers.find((w) => w.nombre === nombre)
@@ -47,12 +54,26 @@ export function WorkersManagement() {
     setEditedWorker({ ...editedWorker, dias_trabajo: newDias })
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editedWorker) return
-    const updatedWorkers = workers.map((w) => (w.nombre === editedWorker.nombre ? editedWorker : w))
-    setWorkers(updatedWorkers)
-    saveWorkers(updatedWorkers)
-    alert(`Configuración de ${editedWorker.nombre} guardada correctamente`)
+    try {
+      await saveWorker(editedWorker)
+      await loadWorkers()
+      alert(`Configuración de ${editedWorker.nombre} guardada correctamente`)
+    } catch (error) {
+      alert("Error al guardar la configuración")
+      console.error(error)
+    }
+  }
+
+  if (loading) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-center text-muted-foreground">Cargando trabajadores...</p>
+        </CardContent>
+      </Card>
+    )
   }
 
   return (
