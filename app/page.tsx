@@ -13,12 +13,24 @@ import { WorkersManagement } from "@/components/workers-management"
 export default function Home() {
   const [reportText, setReportText] = useState("")
   const [result, setResult] = useState<any>(null)
+  const [loading, setLoading] = useState(false)
   const [showConfig, setShowConfig] = useState(false)
 
-  const handleProcess = () => {
-    const processor = new AttendanceProcessor()
-    const processedResult = processor.processReport(reportText)
-    setResult(processedResult)
+  // ✅ CORREGIDO: ahora es async y usa await
+  const handleProcess = async () => {
+    setLoading(true)
+    setResult(null)
+    try {
+      const processor = new AttendanceProcessor()
+      const processedResult = await processor.processReport(reportText)
+
+      setResult(processedResult)
+    } catch (error) {
+      setResult({ error: "Error inesperado al procesar el reporte." })
+      console.error(error)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleClear = () => {
@@ -71,10 +83,10 @@ export default function Home() {
               />
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleProcess} disabled={!reportText.trim()}>
-                Procesar Reporte
+              <Button onClick={handleProcess} disabled={!reportText.trim() || loading}>
+                {loading ? "Procesando..." : "Procesar Reporte"}
               </Button>
-              <Button variant="outline" onClick={handleClear}>
+              <Button variant="outline" onClick={handleClear} disabled={loading}>
                 Limpiar
               </Button>
             </div>
@@ -94,6 +106,7 @@ export default function Home() {
                 </div>
               ) : (
                 <div className="space-y-4">
+                  {/* Tabla Resumen */}
                   <div className="overflow-x-auto">
                     <table className="w-full border-collapse">
                       <thead>
@@ -110,16 +123,20 @@ export default function Home() {
                         <tr className="border-b">
                           <td className="p-3">{result.nombre}</td>
                           <td className="p-3">{result.horasTrabajadas}</td>
-                          <td className="p-3">${result.tarifa.toLocaleString("es-CL")}</td>
-                          <td className="p-3 font-semibold">${result.totalPagar.toLocaleString("es-CL")}</td>
+                          <td className="p-3">
+                            ${result.tarifa?.toLocaleString("es-CL") || 0}
+                          </td>
+                          <td className="p-3 font-semibold">
+                            ${result.totalPagar?.toLocaleString("es-CL") || 0}
+                          </td>
                           <td className="p-3">
                             <span
                               className={`inline-block rounded px-2 py-1 text-sm ${
                                 result.bono === "bono1"
                                   ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
                                   : result.bono === "bono2"
-                                    ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-                                    : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
+                                  ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                                  : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
                               }`}
                             >
                               {result.bono}
@@ -127,13 +144,14 @@ export default function Home() {
                             </span>
                           </td>
                           <td className="p-3 text-lg font-bold text-primary">
-                            ${result.totalFinal.toLocaleString("es-CL")}
+                            ${result.totalFinal?.toLocaleString("es-CL") || 0}
                           </td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
 
+                  {/* Detalle por Día */}
                   {result.detalles && result.detalles.length > 0 && (
                     <div className="mt-6">
                       <h3 className="mb-3 font-semibold">Detalle por Día</h3>
@@ -156,7 +174,7 @@ export default function Home() {
                                 <td className="p-2">{detalle.dia}</td>
                                 <td className="p-2">{detalle.entrada || "-"}</td>
                                 <td className="p-2">{detalle.salida || "-"}</td>
-                                <td className="p-2">{detalle.horas?.toFixed(2) || "-"}</td>
+                                <td className="p-2">{detalle.horas ? detalle.horas.toFixed(2) : "-"}</td>
                                 <td className="p-2">
                                   <span
                                     className={`text-xs ${
@@ -175,6 +193,19 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+
+                  {/* Alertas opcionales */}
+                  {result.alertas && result.alertas.length > 0 && (
+                    <div className="mt-4 rounded bg-yellow-50 p-3 text-yellow-800">
+                      <p className="font-semibold">Avisos:</p>
+                      <ul className="list-disc pl-5">
+                        {result.alertas.map((alerta: string, idx: number) => (
+                          <li key={idx}>{alerta}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                 </div>
               )}
             </CardContent>
